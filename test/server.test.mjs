@@ -31,7 +31,9 @@ test('a plain message can save a note and a date reply identifies its saved task
   t.after(()=>child.kill());
   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Startup timeout')),10000);child.stdout.once('data',()=>{clearTimeout(timer);resolve();});child.stderr.once('data',data=>{clearTimeout(timer);reject(Error(String(data)));});});
   const {token}=await (await fetch(origin+'/api/status')).json();
-  const post=(path,data)=>fetch(origin+path,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json','X-Woven-Token':token},body:JSON.stringify(data)});
+  // A learning snapshot may briefly hold the server lock. Retry only the
+  // explicit pre-mutation busy rejection, never a save conflict or failed save.
+  const post=async(path,data)=>{for(let attempt=0;;attempt++){const response=await fetch(origin+path,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json','X-Woven-Token':token},body:JSON.stringify(data)});if(response.status!==409||attempt>=20||(await response.clone().json()).error!=='I’m still handling the previous request. Please wait a moment.')return response;await new Promise(resolve=>setTimeout(resolve,20));}};
   const reviewed=await (await post('/api/chat',{text:'Review useful steps',threadId:'group:school',intent:'analyze_task'})).json();assert.ok(reviewed.state.groups.find(g=>g.id==='school').stepsReviewedAt);assert.equal(reviewed.state.notes.length,0);
   assert.equal((await post('/api/chat',{text:'unsafe review',threadId:'group:school',intent:'analyze_task'})).status,502);
   const unchanged=await (await fetch(origin+'/api/status')).json();assert.ok(!unchanged.state.groups.find(g=>g.id==='dinner').steps.some(s=>s.title==='Unrelated step'));
@@ -93,6 +95,7 @@ test('local mode still saves notes and files without cloud credentials',async t=
   const undone=await h.post('/api/undo',{},status.token);assert.equal((await undone.json()).state.groups.find(g=>g.id==='dinner').steps[0].due,undefined);
   assert.match((await h.get('/network.mjs')).headers.get('content-type'),/javascript/);
   assert.equal((await h.get('/chat.css')).status,200);
+  const manifestResponse=await h.get('/manifest.webmanifest');assert.equal(manifestResponse.status,200);assert.match(manifestResponse.headers.get('content-type'),/manifest\+json/);assert.equal((await manifestResponse.json()).display,'standalone');for(const asset of ['/pwa.mjs','/sw.js','/offline.html','/offline.css','/icons/woven-180.png','/icons/woven-192.png','/icons/woven-512.png'])assert.equal((await h.get(asset)).status,200);assert.equal((await h.get('/sw.js')).headers.get('service-worker-allowed'),'/');assert.equal((await h.get('/icons/private.png')).status,404);
   for(const asset of ['/vendor/pdfjs/pdf.mjs','/vendor/pdfjs/pdf.worker.mjs']){const response=await h.get(asset);assert.equal(response.status,200);assert.match(response.headers.get('content-type'),/javascript/);}
   const decoder=await h.get('/vendor/pdfjs/wasm/openjpeg.wasm');assert.equal(decoder.status,200);assert.match(decoder.headers.get('content-type'),/wasm/);
   assert.equal((await h.get('/vendor/pdfjs/server.mjs')).status,404);

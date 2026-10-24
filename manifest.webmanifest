@@ -1,0 +1,17 @@
+{
+  "id": "/",
+  "name": "Woven",
+  "short_name": "Woven",
+  "description": "Your tasks, notes and AI assistant in one simple place.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#edf1ed",
+  "theme_color": "#3f6b4d",
+  "prefer_related_applications": false,
+  "icons": [
+    {"src": "/icons/woven-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/icons/woven-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+    {"src": "/icons/woven-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

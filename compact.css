@@ -184,3 +184,5 @@ textarea:focus-visible{outline:2px solid var(--green)}
 .workspace.voice-open{display:block}.workspace.voice-open>.home-panel,.voice-open .ai-next-task{display:none!important}.workspace.voice-open>.ai-page{width:100%;height:100%;max-width:880px;margin:0 auto;min-height:0;padding:0 14px}header>#ai-back{display:grid;place-items:center;width:40px;height:40px;flex-shrink:0;font-size:24px;padding:0}header>#ai-mic{flex-shrink:0}header>.capture-form{min-width:0}@media(max-width:700px){.workspace.voice-open{display:block}.workspace.voice-open>.ai-page{height:100%;padding:0 10px}header:has(>#ai-back){gap:5px;padding-inline:6px}header>#ai-back{width:35px;height:40px}.voice-open .ai-heading{min-height:32px}}
 
 .voice-timings{padding-top:3px;font-size:10px}.voice-timings:empty{display:none}
+
+.install-step{margin:16px 0}.install-step strong{font-size:13px}.install-step p{font-size:12px;line-height:1.6;margin-top:5px}
