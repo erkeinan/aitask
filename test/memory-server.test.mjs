@@ -1,0 +1,40 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdtemp,writeFile,readFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {setTimeout as delay} from 'node:timers/promises';
+const root=fileURLToPath(new URL('../',import.meta.url));
+
+test('background learning saves grounded facts, survives restart, and honors pause, forgetting and source deletion',async t=>{
+  const dataDir=await mkdtemp(join(tmpdir(),'woven-memory-')),origin='http://127.0.0.1:14331';
+  await writeFile(join(dataDir,'state.json'),JSON.stringify({groups:[],notes:[],messages:[],files:[],undo:[]}));
+  let child,token;
+  const start=async()=>{
+    child=spawn(process.execPath,['--import','./test/fixtures/fake-ai.mjs','server.mjs'],{cwd:root,env:{...process.env,PORT:'14331',WOVEN_APP_URL:origin,WOVEN_DATA_DIR:dataDir,WOVEN_STORAGE:'',RENDER:'',NODE_ENV:'test',OPENAI_API_KEY:'test-only'},windowsHide:true,stdio:['ignore','pipe','pipe']});
+    await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Startup timeout')),10000);child.stdout.once('data',()=>{clearTimeout(timer);resolve();});child.stderr.once('data',bytes=>{clearTimeout(timer);reject(Error(String(bytes)));});});
+    token=(await status()).token;
+  };
+  const stop=async()=>{const stopped=new Promise(resolve=>child.once('exit',resolve));child.kill();await stopped;};
+  t.after(()=>child?.kill());
+  const status=async()=>{const response=await fetch(origin+'/api/status');return response.json();};
+  const post=async(path,data)=>{for(let attempt=0;attempt<10;attempt++){const response=await fetch(origin+path,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json','X-Woven-Token':token},body:JSON.stringify(data)});const result=await response.json();if(response.status===409){await delay(30);continue;}assert.equal(response.status,200,result.error);return result;}throw Error('Server remained busy');};
+  const waitFor=async predicate=>{for(let attempt=0;attempt<150;attempt++){const result=await status();if(predicate(result.state))return result.state;await delay(40);}throw Error('Memory did not reach expected state');};
+  await start();
+  const note=await post('/api/notes',{text:'Maya is my coworker and graphic designer.'});
+  let state=await waitFor(s=>s.memory.facts.length===2);assert.equal(state.memory.entities.length,1);assert.ok(state.memory.evidence.every(e=>e.sourceKey==='note:'+note.note.id));
+  const fact=state.memory.facts.find(f=>f.attribute==='role');
+  await post('/api/knowledge',{operation:'forget',id:fact.id,expected:fact.revision});
+  await stop();await start();
+  await post('/api/notes',{text:'Maya is my coworker and graphic designer.'});
+  state=await waitFor(s=>s.memory.jobs.length===0);assert.ok(!state.memory.facts.some(f=>f.attribute==='role'));
+  const paused=await post('/api/chat',{text:'Pause automatic learning'});assert.equal(paused.state.memory.enabled,false);assert.deepEqual(paused.state.messages.at(-1).actions,[]);
+  await post('/api/notes',{text:'learning-failure-case'});await delay(500);state=(await status()).state;assert.ok(state.memory.jobs.length);assert.equal(state.memory.jobs[0].status,'queued');
+  await post('/api/knowledge',{operation:'settings',enabled:true});state=await waitFor(s=>s.memory.jobs.some(j=>j.status==='failed'));assert.ok(state.memory.jobs.find(j=>j.status==='failed').error);
+  const remembered=await post('/api/chat',{text:'Remember that I run a design studio'});assert.ok(remembered.state.memory.facts.some(f=>f.value==='Runs a design studio'));assert.equal(remembered.state.notes.length,state.notes.length);
+  const message=remembered.state.messages.find(m=>m.text==='Remember that I run a design studio');
+  const deleted=await post('/api/knowledge',{operation:'delete_source',sourceKey:'message:'+message.id,confirmed:true});assert.ok(!deleted.state.messages.some(m=>m.id===message.id));
+  const stored=JSON.parse(await readFile(join(dataDir,'state.json'),'utf8'));assert.equal(stored.memory.version,1);assert.ok(!JSON.stringify(stored.memory).includes('Graphic designer'));
+});
