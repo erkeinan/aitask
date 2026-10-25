@@ -1,6 +1,6 @@
 import {normalDate,recordSchedule,localClock} from './task-model.mjs';
-export const defaultPreferences={theme:'system',accent:'sage',effect:'confetti',direction:'down',sort:'due'};
-export function preferences(value={}){const result={...defaultPreferences};for(const [key,allowed]of Object.entries({theme:['system','light','dark'],accent:['sage','ocean','plum','amber','rose'],effect:['confetti','balloons','stars','bubbles','none'],direction:['down','up'],sort:['due','newest','oldest','title','tasks','notes']}))if(allowed.includes(value?.[key]))result[key]=value[key];return result;}
+export const defaultPreferences={fontSize:'medium',theme:'system',accent:'sage',effect:'confetti',direction:'down',sort:'due'};
+export function preferences(value={}){const result={...defaultPreferences};for(const [key,allowed]of Object.entries({fontSize:['small','medium','large'],theme:['system','light','dark'],accent:['sage','ocean','plum','amber','rose'],effect:['confetti','balloons','stars','bubbles','none'],direction:['down','up'],sort:['due','newest','oldest','title','tasks','notes']}))if(allowed.includes(value?.[key]))result[key]=value[key];return result;}
 export function validateRecurrence(value){
   if(value==null||value.frequency==='none')return null;
   if(!value||!['daily','weekly','monthly','yearly'].includes(value.frequency)||!Number.isInteger(value.interval??1)||(value.interval??1)<1||(value.interval??1)>365)throw Error('Choose a valid repeat interval.');

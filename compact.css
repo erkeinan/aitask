@@ -186,3 +186,14 @@ textarea:focus-visible{outline:2px solid var(--green)}
 .voice-timings{padding-top:3px;font-size:10px}.voice-timings:empty{display:none}
 
 .install-step{margin:16px 0}.install-step strong{font-size:13px}.install-step p{font-size:12px;line-height:1.6;margin-top:5px}
+
+/* Text scales without widening the viewport; Small preserves the original UI. */
+:root{--text-scale:1.16}:root[data-font-size="small"]{--text-scale:1}:root[data-font-size="large"]{--text-scale:1.32}
+.entry-title{font-size:calc(14px * var(--text-scale))!important}.entry-preview{font-size:calc(12px * var(--text-scale))!important}.entry-category,.due-chip,.entry-kind{font-size:calc(10px * var(--text-scale))!important}
+.capture-field input,.inline-editor,.ai-bubble p,#ai-input{font-size:calc(15px * var(--text-scale))!important}.home-filter,.detail-toolbar button,.menu-panel button,.preferences-control,.schedule-form label{font-size:calc(12px * var(--text-scale))!important}
+.entry-top{align-items:flex-start}.entry-title,.entry-preview{line-height:1.35}.inline-editor{line-height:1.5}.entry-meta{flex-wrap:wrap}.preferences-control select{font-size:inherit}
+
+.reminder-option{display:flex!important;align-items:center;gap:10px;font-size:15px!important}.reminder-option input{width:20px!important;height:20px}.schedule-form select{font:inherit}.offline-pending{color:var(--muted)}
+
+@media(display-mode:standalone){.workspace[data-open="false"]{grid-template-columns:1fr}.workspace[data-open="false"] .detail-panel{display:none}}
+dialog form[method="dialog"]{display:flex;flex-wrap:wrap;gap:10px;margin-top:15px}.offline-pending{font-size:11px}

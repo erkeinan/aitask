@@ -120,7 +120,7 @@ export function setRelations(state,{threadId,category='',people=[],parentId='',s
   if(typeof category!=='string'||category.length>100||!Array.isArray(people)||people.length>20||people.some(p=>typeof p!=='string'||!p.trim()||p.length>100))throw Error('Use a category and a list of people.');
   const next=structuredClone(state),{record,note}=recordAt(next,threadId);
   if(parentId){if(!next.groups.some(g=>g.id===parentId))throw Error('Parent task not found.');let current=parentId;const seen=new Set();while(current){if((!note&&current===record.id)||seen.has(current))throw Error('A task cannot be its own parent or descendant.');seen.add(current);current=next.groups.find(g=>g.id===current)?.parentId;}}
-  record.category=category.trim();if(space)record.space=space;record.people=[...new Map(people.map(p=>[p.trim().toLocaleLowerCase(),p.trim()])).values()];if(note){if(record.groupId!==parentId)record.stepId='';record.groupId=parentId;}else record.parentId=parentId;return next;
+  record.classificationManual=true;record.category=category.trim();if(space)record.space=space;record.people=[...new Map(people.map(p=>[p.trim().toLocaleLowerCase(),p.trim()])).values()];if(note){if(record.groupId!==parentId)record.stepId='';record.groupId=parentId;}else record.parentId=parentId;return next;
 }
 export function validateUpload(state,input){
 validateTarget(state,input);const name=String(input.name||'').replace(/[\x00-\x1f<>:"/\\|?*]/g,'_').slice(0,160).trim();

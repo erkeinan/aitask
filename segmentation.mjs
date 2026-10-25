@@ -1,19 +1,26 @@
 const web=/\b(?:website|web site|web development|landing page|ecommerce|e-commerce)\b|(?:לבנות|בניית|פיתוח|לעדכן|עדכון|עיצוב|שיפור)\s+(?:אתר|האתר)|(?:טיפול|לטפל|עבודה|לעבוד)\s+(?:באתר|על האתר)|אתר\s+(?:אינטרנט|לעסק|ללקוח)/iu;
-const personal=/\b(?:personal (?:website|blog)|hobby|wedding|family website)\b|אתר\s+(?:אישי|חתונה|משפחתי)|בלוג אישי/iu;
+const development=/\b(?:develop(?:ment|er|ing)?|software|coding|programming|codebase|debug(?:ging)?|bug fix|api|supabase|render|deployment|deploy|github|frontend|backend|app development|crm)\b|פיתוח|תכנות|תוכנה|אפליקציה|דיבאג|תיקון באג/iu;
+const personal=/\b(?:personal (?:website|blog|app|project)|hobby|wedding|family website)\b|אתר\s+(?:אישי|חתונה|משפחתי)|בלוג אישי|פרויקט אישי|אפליקציה אישית/iu;
 const business=/\b(?:client|customer|business|company|for work|work project)\b|לקוח|לעסק|לעבודה|לחברה|עסקי/iu;
 const loan=/\b(?:loans?|lent|borrowed|lending|owe[sd]?|needs? to pay me)\b|הלווא|הלוויתי|לווה|חייב(?:ת)? לי|צריך להחזיר לי/iu;
 const money=/\b(?:payment|paid|deposit|salary|bank|money|tax)\b|תשלום|שילמתי|הפקדתי|משכורת|כסף|מסים|מיסים/iu;
 const generic=value=>!value||/^(?:personal|family|work|general|notes?|tasks?|uncategorized)$/i.test(value);
 export function classifyRecord(text,{space='',category='',parent=null}={}){
-  text=String(text||'');const isLoan=loan.test(text),isWeb=web.test(text),work=business.test(text);
+  text=String(text||'');const isLoan=loan.test(text),isWeb=web.test(text),isDev=development.test(text),work=business.test(text);
   let segment=space||parent?.space||'Personal',topic=category||parent?.category||'';
-  if(isWeb){if(personal.test(text))segment='Personal';else segment='Work';if(generic(topic))topic='Websites';}
+  if(isWeb){if(personal.test(text))segment='Personal';else segment='Work';if(generic(topic)||/^(?:development|work development)$/i.test(topic))topic='Websites';}
+  else if(isDev){segment=personal.test(text)?'Personal':'Work';if(generic(topic)||/^(?:websites|work development|software|coding)$/i.test(topic))topic='Development';}
   else if(work)segment='Work';
   if(isLoan){if(!space&&!parent)segment=work?'Work':'Personal';if(generic(category)||web.test(category))topic='Loans';}
   else if(money.test(text)&&generic(topic))topic='Finance';
   return {space:segment,category:topic||'Notes'};
 }
 export function financialRecord(record){return !!record.money||loan.test([record.category,record.text,record.title].filter(Boolean).join(' '));}
+export function reviewSegmentation(state){
+  const next=structuredClone(state);
+  for(const record of [...next.groups,...(next.notes||[])]){if(record.classificationManual)continue;const text=[record.title,record.text,...(record.steps||[]).map(s=>s.title),...(record.sources||[])].filter(Boolean).join('\n');Object.assign(record,classifyRecord(text,{space:record.space,category:record.category,parent:next.groups.find(g=>g.id===(record.parentId||record.groupId))}));}
+  next.segmentationVersion=2;return next;
+}
 export function financialFollowup(text){return /\d/u.test(text)&&(/\b(?:another|additional|more|also|total|loan|lent|borrowed|owe)\b|עוד|נוסף|סכום|הלווא|חייב|בסך/iu.test(text)||/^\s*[₪$€£]?\s*[\d,.]+\s*(?:ILS|USD|EUR|שקל(?:ים)?|ש[״"]?ח)?[.!]?\s*$/iu.test(text));}
 export function normalizeCaptureActions(state,actions,text){
   const creations=actions.filter(a=>['create_group','create_note'].includes(a.type));return actions.map(action=>{if(!creations.includes(action))return action;const parent=state.groups.find(g=>g.id===(action.type==='create_note'?action.group_id:action.parent_id));const classification=classifyRecord([creations.length===1?text:'',action.title,action.text].join('\n'),{space:action.space,category:action.category,parent});return {...action,...classification};});

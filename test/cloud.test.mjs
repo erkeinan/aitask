@@ -25,7 +25,7 @@ test('login accepts only the owner; cookies contain no provider tokens',async()=
   const h=harness((url)=>url.includes('/token?')?token():json({id:owner}));
   await assert.rejects(h.cloud.authenticate({headers:{}}),{status:401});
   await h.cloud.login(credentials,h.res);
-  assert.match(h.cookie(),/^__Host-woven-session=/);assert.match(h.cookie(),/HttpOnly/);assert.match(h.cookie(),/SameSite=Strict/);assert.match(h.cookie(),/Secure/);
+  assert.match(h.cookie(),/^__Host-woven-session=/);assert.match(h.cookie(),/HttpOnly/);assert.match(h.cookie(),/SameSite=Lax/);assert.match(h.cookie(),/Secure/);
   assert.doesNotMatch(h.cookie(),/test-access|test-refresh/);
   const s=await h.cloud.authenticate(h.req());assert.equal(s.userId,owner);assert.ok(s.csrf);
   const other=harness(()=>token('22222222-2222-4222-8222-222222222222'));

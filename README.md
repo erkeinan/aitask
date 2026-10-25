@@ -206,3 +206,15 @@ Going Back clears the visible conversation, pending question, typed draft and ac
 Open the deployed HTTPS app and choose Menu → Install Woven. Supported browsers show their native install prompt; other browsers show home-screen instructions. iPhone and iPad users can open Woven in Safari, choose Share → Add to Home Screen, then Add. The installed app opens in its own window with a Woven icon. Sign in normally after installing.
 
 Installation does not add offline task editing, notification delivery or background AI. Tasks, files, voice and syncing still require a connection. The service worker caches only the generic offline help page and its style sheet; account, task, chat and file API responses are never cached. Other app resources are fetched from the network so updated code is not held in a stale application cache.
+
+
+### Device experience
+Settings → Font size: Small preserves the original size; Medium is the default; Large increases text further. No in-app welcome screen is shown in standalone mode once signed in. The operating system may briefly show its own launch screen.
+
+Sessions use a 30-day rolling encrypted HttpOnly cookie. Set WOVEN_SESSION_SECRET to a stable random 32-byte secret in Render before deployment, and keep it unchanged across deploys. Rotating it signs out devices. Provider revocation and browser cookie deletion still require sign-in.
+
+The PWA caches only public app assets. After one online sign-in, IndexedDB holds the last saved snapshot on this device. Offline capture supports new tasks and notes, with explicit type selection; AI, voice, images, attachments and edits need internet. Reconnection merges new captures by UUID without overwriting remote edits. Explicit sign-out clears the device snapshot and outbox. Anyone with access to an unlocked signed-in browser can see its offline items.
+
+Task reminders default to 10 minutes before the earliest open deadline. Per-task reminders allow up to five offsets (0–40320 minutes). Dates without a time use 09:00 Asia/Jerusalem. Enable alerts on each device from Settings. Browser/OS notification permission is required; iPhone/iPad requires a Home Screen installation. Supabase Cron invokes woven-reminders every minute, independently of Render sleeping. Supabase state is authoritative; completed/deleted tasks no longer generate reminders. Push delivery depends on network and device settings and may be delayed.
+
+Background push setup: run supabase/device-alerts.sql (owner policy is specific to this private pilot), set private configuration in woven_push_config using administrator access only, deploy supabase/functions/woven-reminders with reminders.mjs, task-model.mjs and task-intelligence.mjs as relative files, and schedule an authenticated pg_net invocation. Set the corresponding WOVEN_VAPID_PUBLIC_KEY in Render. Secrets must never be committed.

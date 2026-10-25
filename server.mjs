@@ -15,7 +15,9 @@ import {inspectFile,suggestFiling,filingRequest,validFilingReply,filingRecords} 
 import {assistantSession,assistantHistory} from './ai-session.mjs';
 import {voiceGreeting} from './voice-preferences.mjs';
 import {transcriptionForm,transcriptNeedsReview} from './voice.mjs';
-import {normalizeCaptureActions,financialCreationReview,classifyRecord} from './segmentation.mjs';
+import {normalizeCaptureActions,financialCreationReview,classifyRecord,reviewSegmentation} from './segmentation.mjs';
+import {reminderMinutes} from './reminders.mjs';
+import {syncCaptures} from './offline-sync.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
 const config=cloudConfig();
@@ -95,7 +97,7 @@ const pwaAssets={'/manifest.webmanifest':['manifest.webmanifest','application/ma
 if(req.method==='GET'&&pwaAssets[url.pathname]){const [file,mime]=pwaAssets[url.pathname];res.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff',...(url.pathname==='/sw.js'?{'Service-Worker-Allowed':'/'}:{})});return res.end(await readFile(join(root,file)));}
 if(req.method==='GET'&&/^\/vendor\/pdfjs\/(?:pdf(?:\.worker)?\.mjs|LICENSE|(?:cmaps|standard_fonts|wasm|iccs)\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)$/.test(url.pathname)){
 const bytes=await readFile(join(root,url.pathname.slice(1)));res.writeHead(200,{'Content-Type':url.pathname.endsWith('.mjs')?'text/javascript; charset=utf-8':url.pathname.endsWith('.wasm')?'application/wasm':'application/octet-stream','Cache-Control':'public, max-age=3600','X-Content-Type-Options':'nosniff'});return res.end(bytes);}
-if(req.method==='GET'&&['/','/app.js','/pwa.mjs','/knowledge-ui.mjs','/ai-page.mjs','/voice-turn.mjs','/voice-preferences.mjs','/threads.mjs','/task-model.mjs','/task-intelligence.mjs','/productivity.mjs','/celebration.mjs','/network.mjs','/style.css','/chat.css','/inbox.css','/records.css','/compact.css'].includes(url.pathname)){
+if(req.method==='GET'&&['/offline-store.mjs','/device-alerts.mjs','/reminders.mjs','/','/app.js','/pwa.mjs','/knowledge-ui.mjs','/ai-page.mjs','/voice-turn.mjs','/voice-preferences.mjs','/threads.mjs','/task-model.mjs','/task-intelligence.mjs','/productivity.mjs','/celebration.mjs','/network.mjs','/style.css','/chat.css','/inbox.css','/records.css','/compact.css'].includes(url.pathname)){
 const name=url.pathname==='/'?'index.html':url.pathname.slice(1);const text=await readFile(join(root,name));res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':(name.endsWith('.js')||name.endsWith('.mjs'))?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; font-src 'self' blob: data:; img-src 'self' data: blob:; frame-src 'self'; object-src 'none'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'self'; base-uri 'none'; form-action 'self'"});return res.end(text);}
 if(!url.pathname.startsWith('/api/'))return json(res,404,{error:'Not found.'});
 if(cloud&&req.method==='POST'&&url.pathname==='/api/auth/login'){
@@ -103,7 +105,7 @@ if(req.headers.origin!==origin||!String(req.headers['content-type']).startsWith(
 await cloud.login(await body(req),res);return json(res,200,{ok:true});
 }
 let session;
-if(cloud){try{session=await cloud.authenticate(req);}catch(e){if(e.status===401&&req.method==='GET'&&url.pathname==='/api/status')return json(res,200,{authRequired:true,authenticated:false});throw e;}}
+if(cloud){try{session=await cloud.authenticate(req,res);}catch(e){if(e.status===401&&req.method==='GET'&&url.pathname==='/api/status')return json(res,200,{authRequired:true,authenticated:false});return json(res,e.status||500,{error:e.message,authRequired:e.status===401});}}
 const csrf=session?.csrf||token;
 if(req.method==='GET'&&url.pathname==='/api/status'){
 const saved=cloud?await cloud.load(session):{payload:localState};
@@ -129,6 +131,18 @@ next=queueLearning(next);
 version=await writeState(session,next,version);
 state=next;
 };
+if(url.pathname==='/api/segmentation/review'){await persist(reviewSegmentation(state));return json(res,200,{state:safeState(state)});}
+if(url.pathname==='/api/notifications/key')return json(res,200,{publicKey:process.env.WOVEN_VAPID_PUBLIC_KEY||''});
+if(url.pathname==='/api/notifications/subscribe'||url.pathname==='/api/notifications/unsubscribe'){
+  if(!cloud)return json(res,400,{error:'Background alerts are available in the deployed app.'});
+  await cloud.devices(session,url.pathname.endsWith('/subscribe')?'subscribe':'unsubscribe',input.subscription||input.endpoint);return json(res,200,{ok:true});
+}
+if(url.pathname==='/api/task/reminders'){
+  try{const next=structuredClone(state),g=next.groups.find(g=>g.id===input.groupId);if(!g)throw Error('Task not found.');g.reminderMinutes=reminderMinutes(input.minutes);await persist(next);return json(res,200,{state:safeState(state)});}catch(e){return json(res,400,{error:e.message});}
+}
+if(url.pathname==='/api/offline/sync'){
+  try{await persist(syncCaptures(state,input.operations));return json(res,200,{state:safeState(state)});}catch(e){return json(res,e.status||400,{error:e.message});}
+}
 if(url.pathname==='/api/knowledge'){
 try{
   if(input.operation==='delete_source'){

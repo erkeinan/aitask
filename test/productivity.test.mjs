@@ -28,5 +28,5 @@ test('default sorting puts overdue and next due tasks first; alternate sorts cov
  const state=sample();state.groups.push({id:'later',title:'A later task',due:'2026-10-25',steps:[]},{id:'undated',title:'Undated',steps:[]});const entries=conversationEntries(state);assert.deepEqual(sortedEntries(entries).map(e=>e.id),['group:g','group:later','group:undated','note:n']);assert.equal(sortedEntries(entries,'notes')[0].id,'note:n');assert.equal(sortedEntries(entries,'title')[0].id,'group:later');
 });
 test('appearance and reward preferences accept only known values',()=>{
- assert.deepEqual(preferences({theme:'dark',accent:'ocean',effect:'stars',direction:'up',sort:'notes'}),{theme:'dark',accent:'ocean',effect:'stars',direction:'up',sort:'notes'});assert.equal(preferences({theme:'script',effect:'unknown',sort:'unknown'}).sort,'due');
+ assert.deepEqual(preferences({theme:'dark',accent:'ocean',effect:'stars',direction:'up',sort:'notes'}),{fontSize:'medium',theme:'dark',accent:'ocean',effect:'stars',direction:'up',sort:'notes'});assert.equal(preferences({theme:'script',effect:'unknown',sort:'unknown'}).sort,'due');
 });
