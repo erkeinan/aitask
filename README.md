@@ -218,3 +218,15 @@ The PWA caches only public app assets. After one online sign-in, IndexedDB holds
 Task reminders default to 10 minutes before the earliest open deadline. Per-task reminders allow up to five offsets (0–40320 minutes). Dates without a time use 09:00 Asia/Jerusalem. Enable alerts on each device from Settings. Browser/OS notification permission is required; iPhone/iPad requires a Home Screen installation. Supabase Cron invokes woven-reminders every minute, independently of Render sleeping. Supabase state is authoritative; completed/deleted tasks no longer generate reminders. Push delivery depends on network and device settings and may be delayed.
 
 Background push setup: run supabase/device-alerts.sql (owner policy is specific to this private pilot), set private configuration in woven_push_config using administrator access only, deploy supabase/functions/woven-reminders with reminders.mjs, task-model.mjs and task-intelligence.mjs as relative files, and schedule an authenticated pg_net invocation. Set the corresponding WOVEN_VAPID_PUBLIC_KEY in Render. Secrets must never be committed.
+
+
+### Capture and AI connection update
+The header opens dedicated search/add/file/voice interactions with the task list hidden. Choose Task or Note to save online or offline without an AI key. These entries stay in Inbox until Organize with AI or a manual category edit is used. Offline items synchronize by UUID after reconnecting.
+
+On hosted pilots, newly connected OpenAI API keys are encrypted using a domain-separated AES-GCM key derived from WOVEN_SESSION_SECRET, then stored in the owner-only woven_ai_settings table. Apply supabase/ai-settings.sql before deploying this update. The server restores this connection on startup/status, and Disconnect AI removes it. No API key enters browser persistent storage or task snapshots. Keep WOVEN_SESSION_SECRET stable.
+
+A FIFO write gate replaces system-busy rejections. AI chat releases the write gate during model requests, then reads the current state before committing; conflicting edits to existing targets are rejected explicitly. File analysis and voice requests do not hold the task-save gate.
+
+Record a message is the default voice mode: tap microphone, speak, tap stop, receive written guidance. Voice replies can be enabled in the conversation. Hands-free mode is optional in Settings. Network and AI inference still take time; zero-delay conversation is not promised.
+
+Files are analyzed before saving. Users explicitly save extracted information, with a checkbox to retain the original too. Receipts can be grouped under Receipts and linked to an existing task/note. Summary-only saves are blocked when an image/PDF has not actually been read. Original images used for AI chat are not persisted in new chat messages; files are retained only through the file-save action.

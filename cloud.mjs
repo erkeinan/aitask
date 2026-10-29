@@ -100,5 +100,12 @@ export function createCloud(config,{fetcher=fetch,secure=true,now=Date.now,sessi
     if(operation==='subscribe'&&(!/^[A-Za-z0-9_-]{80,100}$/.test(subscription?.keys?.p256dh)||!/^[A-Za-z0-9_-]{20,30}$/.test(subscription?.keys?.auth)))throw failure(400,'Invalid notification keys.');
     const r=await request('/rest/v1/woven_devices'+(operation==='subscribe'?'?on_conflict=user_id,endpoint':'?user_id=eq.'+s.userId+'&endpoint=eq.'+encodeURIComponent(endpoint)),{access:s.access,method:operation==='subscribe'?'POST':'DELETE',data:operation==='subscribe'?{user_id:s.userId,endpoint,subscription}:undefined,headers:operation==='subscribe'?{Prefer:'resolution=merge-duplicates'}:{}});if(!r.ok)throw failure(502,'Could not save notification preferences.');
   }
-  return {login,authenticate,logout,load,save,upload,download,remove,devices};
+  async function aiSetting(s,value){
+    const path='/rest/v1/woven_ai_settings?user_id=eq.'+s.userId;
+    const reading=value===undefined,removing=value===null;
+    const r=await request(reading?path+'&select=encrypted_key':removing?path:'/rest/v1/woven_ai_settings?on_conflict=user_id',{access:s.access,method:reading?'GET':removing?'DELETE':'POST',data:!reading&&!removing?{user_id:s.userId,encrypted_key:value,updated_at:new Date(now()).toISOString()}:undefined,headers:!reading&&!removing?{Prefer:'resolution=merge-duplicates'}:{}});
+    if(!r.ok)throw failure(502,'Could not load or save your private AI connection. Please try again.');
+    return reading?(await r.json())[0]?.encrypted_key||'':null;
+  }
+  return {login,authenticate,logout,load,save,upload,download,remove,devices,aiSetting};
 }

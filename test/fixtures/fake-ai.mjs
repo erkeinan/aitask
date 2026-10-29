@@ -6,6 +6,7 @@ globalThis.fetch=async(url,options={})=>{
   if(String(url).startsWith('https://api.openai.com/v1/models/'))return Response.json({id:'test-model'});
   if(String(url)!=='https://api.openai.com/v1/responses')return realFetch(url,options);
   const request=JSON.parse(options.body),text=request.input.at(-1).content[0].text;
+  if(text==='slow-ai-concurrency-case')await new Promise(resolve=>setTimeout(resolve,600));
   if(request.text?.format?.name==='woven_learning'){
     if(text.includes('learning-failure-case'))return new Response('{}',{status:503});
     const facts=[];

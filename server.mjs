@@ -1,3 +1,5 @@
+import {createGate} from './request-gate.mjs';
+import {aiVault} from './ai-vault.mjs';
 import http from 'node:http';
 import {readFile,writeFile,mkdir,rename,unlink} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -17,6 +19,7 @@ import {voiceGreeting} from './voice-preferences.mjs';
 import {transcriptionForm,transcriptNeedsReview} from './voice.mjs';
 import {normalizeCaptureActions,financialCreationReview,classifyRecord,reviewSegmentation} from './segmentation.mjs';
 import {reminderMinutes} from './reminders.mjs';
+import {segmentationRequest,applySegmentation} from './record-segmentation.mjs';
 import {syncCaptures} from './offline-sync.mjs';
 
 const root=dirname(fileURLToPath(import.meta.url));
@@ -32,6 +35,10 @@ localState.notes??=[];localState.files??=[];
 function appendAssistant(next,text,actions=[],threadId='inbox'){next.messages=[...next.messages,{id:randomUUID(),role:'assistant',text,question:null,actions,thread_id:threadId,at:new Date().toISOString()}].slice(-200);return next;}
 const greetingAudio=new Map();
 let apiKey=process.env.OPENAI_API_KEY||'',busy=false;
+const writeGate=createGate();
+const vault=process.env.WOVEN_SESSION_SECRET?aiVault(process.env.WOVEN_SESSION_SECRET):null;
+let keyLoaded=!!apiKey;
+async function restoreAI(session){if(cloud&&!keyLoaded){const sealed=await cloud.aiSetting(session);apiKey=sealed&&vault?vault.open(sealed):'';keyLoaded=true;}}
 const model=process.env.OPENAI_MODEL||'gpt-4.1';
 const token=randomBytes(32).toString('hex');
 const port=Number(process.env.PORT||4317);
@@ -54,14 +61,14 @@ async function runLearning(cookie){
   if(learningRunning)return;if(busy){scheduleLearning(cookie);return;}
   learningRunning=true;let session,snapshot,job,version,result,failed=false;
   try{
-    busy=true;
+    const releaseSnapshot=await writeGate.acquire();busy=true;
     try{
       session=cloud?await cloud.authenticate({headers:{cookie}}):null;
       const saved=cloud?await cloud.load(session):{payload:localState,version:null};
       snapshot=queueLearning(saved.payload);version=saved.version;
       if(JSON.stringify(snapshot)!==JSON.stringify(saved.payload))version=await writeState(session,snapshot,version);
       job=snapshot.memory.enabled&&snapshot.memory.jobs.find(j=>j.status==='queued');
-    }finally{busy=false;}
+    }finally{busy=false;releaseSnapshot();}
     if(!job||!apiKey)return;
     try{
       const upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:'Bearer '+apiKey,'Content-Type':'application/json'},body:JSON.stringify(learningRequest(snapshot,job,model)),signal:AbortSignal.timeout(25000)});
@@ -70,8 +77,7 @@ async function runLearning(cookie){
     }catch{failed=true;}
     // Fetching does not lock normal task/chat saves. Re-read before applying facts.
     const commit=async()=>{
-      while(busy)await new Promise(resolve=>{const timer=setTimeout(resolve,100);timer.unref();});
-      busy=true;
+      const releaseCommit=await writeGate.acquire();busy=true;
       try{
         if(cloud)session=await cloud.authenticate({headers:{cookie}});
         const saved=cloud?await cloud.load(session):{payload:localState,version:null};
@@ -79,7 +85,7 @@ async function runLearning(cookie){
         try{next=failed?failLearning(saved.payload,job.id):applyLearning(saved.payload,job.id,result);}catch{next=failLearning(saved.payload,job.id);}
         await writeState(session,queueLearning(next),saved.version);
       }catch{/* Keep persisted jobs for a later request or explicit retry. */}
-      finally{busy=false;learningRunning=false;scheduleLearning(cookie);}
+      finally{busy=false;releaseCommit();learningRunning=false;scheduleLearning(cookie);}
     };
     await commit();
   }catch{/* Existing tasks are preserved if cloud storage or login is unavailable. */}
@@ -97,7 +103,7 @@ const pwaAssets={'/manifest.webmanifest':['manifest.webmanifest','application/ma
 if(req.method==='GET'&&pwaAssets[url.pathname]){const [file,mime]=pwaAssets[url.pathname];res.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff',...(url.pathname==='/sw.js'?{'Service-Worker-Allowed':'/'}:{})});return res.end(await readFile(join(root,file)));}
 if(req.method==='GET'&&/^\/vendor\/pdfjs\/(?:pdf(?:\.worker)?\.mjs|LICENSE|(?:cmaps|standard_fonts|wasm|iccs)\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)$/.test(url.pathname)){
 const bytes=await readFile(join(root,url.pathname.slice(1)));res.writeHead(200,{'Content-Type':url.pathname.endsWith('.mjs')?'text/javascript; charset=utf-8':url.pathname.endsWith('.wasm')?'application/wasm':'application/octet-stream','Cache-Control':'public, max-age=3600','X-Content-Type-Options':'nosniff'});return res.end(bytes);}
-if(req.method==='GET'&&['/offline-store.mjs','/device-alerts.mjs','/reminders.mjs','/','/app.js','/pwa.mjs','/knowledge-ui.mjs','/ai-page.mjs','/voice-turn.mjs','/voice-preferences.mjs','/threads.mjs','/task-model.mjs','/task-intelligence.mjs','/productivity.mjs','/celebration.mjs','/network.mjs','/style.css','/chat.css','/inbox.css','/records.css','/compact.css'].includes(url.pathname)){
+if(req.method==='GET'&&['/offline-store.mjs','/device-alerts.mjs','/reminders.mjs','/','/app.js','/pwa.mjs','/knowledge-ui.mjs','/ai-page.mjs','/voice-turn.mjs','/voice-preferences.mjs','/threads.mjs','/task-model.mjs','/task-intelligence.mjs','/productivity.mjs','/celebration.mjs','/network.mjs','/style.css','/chat.css','/inbox.css','/records.css','/compact.css','/messaging.css'].includes(url.pathname)){
 const name=url.pathname==='/'?'index.html':url.pathname.slice(1);const text=await readFile(join(root,name));res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':(name.endsWith('.js')||name.endsWith('.mjs'))?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; font-src 'self' blob: data:; img-src 'self' data: blob:; frame-src 'self'; object-src 'none'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'self'; base-uri 'none'; form-action 'self'"});return res.end(text);}
 if(!url.pathname.startsWith('/api/'))return json(res,404,{error:'Not found.'});
 if(cloud&&req.method==='POST'&&url.pathname==='/api/auth/login'){
@@ -109,14 +115,17 @@ if(cloud){try{session=await cloud.authenticate(req,res);}catch(e){if(e.status===
 const csrf=session?.csrf||token;
 if(req.method==='GET'&&url.pathname==='/api/status'){
 const saved=cloud?await cloud.load(session):{payload:localState};
+try{await restoreAI(session);}catch{/* Tasks remain usable if connection settings are temporarily unavailable. */}
 scheduleLearning(req.headers.cookie||'');
 return json(res,200,{authRequired:!!cloud,authenticated:!!session,connected:!!apiKey,model,token:csrf,state:safeState(saved.payload)});
 }
 if(req.headers.origin!==origin||req.headers['x-woven-token']!==csrf||!String(req.headers['content-type']).startsWith('application/json'))return json(res,403,{error:'Please reload Woven and try again.'});
 if(req.method!=='POST')return json(res,405,{error:'Method not allowed.'});
 if(cloud&&url.pathname==='/api/auth/logout'){await cloud.logout(req,res);return json(res,200,{ok:true});}
-if(busy)return json(res,409,{error:'I’m still handling the previous request. Please wait a moment.'});
+let releaseRequest=await writeGate.acquire();
+if(req.destroyed){releaseRequest();return;}
 busy=true;
+const releaseIO=()=>{releaseRequest();releaseRequest=()=>{};busy=false;};
 try{
 const input=await body(req);
 const saved=cloud?await cloud.load(session):{payload:localState,version:null};
@@ -125,12 +134,22 @@ let requestThread;
 try{requestThread=validateThread(state,input.threadId||(input.groupId?'group:'+input.groupId:input.noteId?'note:'+input.noteId:'inbox'));}catch(e){return json(res,400,{error:e.message});}
 const finish=(next,text,actions=[])=>appendAssistant(next,text,actions,requestThread);
 const archiveCandidates=(next)=>next.groups.filter(g=>!g.archivedAt&&(g.completedAt||g.steps.length>0&&g.steps.every(s=>s.done))).map(g=>({threadId:'group:'+g.id,title:g.title}));
+const resumeState=async()=>{releaseRequest=await writeGate.acquire();busy=true;const current=cloud?await cloud.load(session):{payload:localState,version:null};state=current.payload;version=current.version;};
 const persist=async next=>{
 next=advanceRecurring(next,state);
 next=queueLearning(next);
 version=await writeState(session,next,version);
 state=next;
 };
+if(url.pathname==='/api/record/segment'){
+  if(!apiKey)return json(res,400,{error:'Connect AI to organize this item. You can keep using it without AI.',connectAI:true});
+  const info=threadInfo(state,requestThread);if(!info)return json(res,404,{error:'Item not found.'});const record=info.group||info.note,before=JSON.stringify(record);releaseIO();
+  const upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:'Bearer '+apiKey,'Content-Type':'application/json'},body:JSON.stringify(segmentationRequest(record,state,model)),signal:AbortSignal.timeout(20000)});
+  if(!upstream.ok)return json(res,502,{error:apiError(upstream.status)});const output=await upstream.json();if(output.status!=='completed')return json(res,502,{error:'Organization did not finish. Your item is unchanged.'});
+  const reply=JSON.parse((output.output||[]).filter(x=>x.type==='message').flatMap(x=>x.content||[]).filter(x=>x.type==='output_text').map(x=>x.text).join(''));await resumeState();const current=threadInfo(state,requestThread);if(!current||JSON.stringify(current.group||current.note)!==before)return json(res,409,{error:'This item changed while being organized. Try again.'});
+  await persist(applySegmentation(state,requestThread,reply));return json(res,200,{state:safeState(state)});
+}
+if(url.pathname==='/api/capture/manual'){try{await persist(syncCaptures(state,[{id:input.id,text:input.text,kind:input.kind,at:input.at||new Date().toISOString(),deferSegmentation:true}]));return json(res,200,{state:safeState(state),threadId:(input.kind==='task'?'group:':'note:')+input.id});}catch(e){return json(res,400,{error:e.message});}}
 if(url.pathname==='/api/segmentation/review'){await persist(reviewSegmentation(state));return json(res,200,{state:safeState(state)});}
 if(url.pathname==='/api/notifications/key')return json(res,200,{publicKey:process.env.WOVEN_VAPID_PUBLIC_KEY||''});
 if(url.pathname==='/api/notifications/subscribe'||url.pathname==='/api/notifications/unsubscribe'){
@@ -196,13 +215,14 @@ if(url.pathname==='/api/record/text'||url.pathname==='/api/record/update'||url.p
 try{const handler=url.pathname.endsWith('/text')?editRecordText:url.pathname.endsWith('/update')?addRecordUpdate:setRecurrence;const next=handler(state,{...input,threadId:requestThread});if(url.pathname.endsWith('/text')&&requestThread.startsWith('note:')&&!input.stepId){const note=next.notes.find(n=>'note:'+n.id===requestThread);if(note.money){const fact=receivableFact(note.text.split('\n')[0]);if(fact)note.money={...note.money,...fact,currency:fact.currency||currencyCode(note.text.match(/Currency:\s*([^\n]+)/i)?.[1])||note.money.currency};else delete note.money;}}await persist(next);return json(res,200,{state:safeState(state)});}catch(e){return json(res,e.status||400,{error:e.message});}
 }
 if(url.pathname==='/api/files/analyze'){
+releaseIO();
 try{const {file,bytes}=validateUpload(state,input),inspection=inspectFile(file.name,bytes);let suggestions=suggestFiling(state,file.name,inspection.text),summary=inspection.text.slice(0,360),aiUsed=false,aiUnavailable=false;
 if(apiKey&&(inspection.readable||inspection.kind==='image'||inspection.kind==='pdf')){try{const upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:'Bearer '+apiKey,'Content-Type':'application/json'},body:JSON.stringify(filingRequest(state,file.name,bytes,inspection,model)),signal:AbortSignal.timeout(25000)});if(!upstream.ok)throw Error('AI unavailable');const output=await upstream.json();if(output.status!=='completed')throw Error('Incomplete reading');const text=(output.output||[]).filter(x=>x.type==='message').flatMap(x=>x.content||[]).filter(x=>x.type==='output_text').map(x=>x.text).join('');const reply=validFilingReply(JSON.parse(text),state);aiUsed=true;summary=reply.summary;if(reply.threadId){const target=filingRecords(state).find(r=>r.threadId===reply.threadId);suggestions=[{threadId:reply.threadId,title:target.title,confidence:reply.confidence,reason:reply.reason},...suggestions.filter(s=>s.threadId!==reply.threadId)].slice(0,4);}else suggestions=[];}catch{aiUnavailable=true;}}
 return json(res,200,{analysis:{kind:inspection.kind,contentRead:inspection.contentRead||aiUsed,aiUsed,aiUnavailable,summary,suggestions,readStatus:aiUsed?'Read by AI':inspection.contentRead?'Read filename and document text':inspection.kind==='image'||inspection.kind==='pdf'?'Filename only — connect AI to read this image or PDF':'Filename only — this format has no text preview'}});
 }catch(e){return json(res,400,{error:e.message});}
 }
 if(url.pathname==='/api/files/upload'){
-let createdId;try{const {file,bytes}=validateUpload(state,input);let next={...state};if(input.unfiled&&!file.groupId&&!file.noteId){next=addNote(state,{text:input.caption||'File: '+file.name});file.noteId=next.notes.at(-1).id;next.notes.at(-1).fileNoteFor=file.id;requestThread='note:'+file.noteId;}if(cloud)await cloud.upload(session,file.id,bytes);else await writeFile(join(fileDir,file.id),bytes,{flag:'wx'});createdId=file.id;next={...next,files:[...state.files,file]};finish(next,'Saved '+file.name+' for future reference.');await persist(next);return json(res,200,{state:safeState(state),file,threadId:file.noteId?'note:'+file.noteId:file.groupId?'group:'+file.groupId:'inbox'});}catch(e){if(createdId){if(cloud){if(e.status===409)await cloud.remove(session,createdId).catch(()=>{});}else await unlink(join(fileDir,createdId)).catch(()=>{});}return json(res,e.status||400,{error:e.message});}
+let createdId;try{const {file,bytes}=validateUpload(state,input);let next={...state};if(input.unfiled&&!file.groupId&&!file.noteId){next=addNote(state,{text:input.caption||'File: '+file.name,category:typeof input.category==='string'?input.category:'Documents'});file.noteId=next.notes.at(-1).id;next.notes.at(-1).fileNoteFor=file.id;requestThread='note:'+file.noteId;}if(cloud)await cloud.upload(session,file.id,bytes);else await writeFile(join(fileDir,file.id),bytes,{flag:'wx'});createdId=file.id;if(typeof input.summary==='string')file.summary=input.summary.slice(0,4000);file.contentRead=input.contentRead===true;next={...next,files:[...state.files,file]};finish(next,'Saved '+file.name+' for future reference.');await persist(next);return json(res,200,{state:safeState(state),file,threadId:file.noteId?'note:'+file.noteId:file.groupId?'group:'+file.groupId:'inbox'});}catch(e){if(createdId){if(cloud){if(e.status===409)await cloud.remove(session,createdId).catch(()=>{});}else await unlink(join(fileDir,createdId)).catch(()=>{});}return json(res,e.status||400,{error:e.message});}
 }
 if(url.pathname==='/api/files/download'||url.pathname==='/api/files/view'){
 const file=state.files.find(f=>f.id===input.id);if(!file)return json(res,404,{error:'This file was not found.'});
@@ -215,15 +235,17 @@ if(url.pathname==='/api/connect'){
 const candidate=String(input.key||'').trim();if(!candidate.startsWith('sk-')||candidate.length<20)return json(res,400,{error:'Paste your OpenAI API key into this field.'});
 let check;try{check=await fetch(`https://api.openai.com/v1/models/${encodeURIComponent(model)}`,{headers:{Authorization:`Bearer ${candidate}`},signal:AbortSignal.timeout(25000)});}catch{return json(res,502,{error:'Could not reach OpenAI. Check the internet connection and try again.'});}
 if(!check.ok)return json(res,check.status===401?401:400,{error:apiError(check.status)});
-apiKey=candidate;return json(res,200,{connected:true,model});
+if(cloud){if(!vault)return json(res,503,{error:'The server needs its private encryption setting before it can remember AI connections.'});await cloud.aiSetting(session,vault.seal(candidate));}apiKey=candidate;keyLoaded=true;return json(res,200,{connected:true,model,persistent:!!cloud});
 }
-if(url.pathname==='/api/disconnect'){apiKey='';return json(res,200,{connected:false});}
+if(url.pathname==='/api/disconnect'){if(cloud)await cloud.aiSetting(session,null);apiKey='';keyLoaded=true;return json(res,200,{connected:false});}
 if(url.pathname==='/api/voice/speak'){
+releaseIO();
 if(!apiKey)return json(res,401,{error:'Connect AI to hear spoken replies.',connectAI:true});
 let greeting;try{if(input.greeting===true)greeting=voiceGreeting(input.languages??[]);}catch(e){return json(res,400,{error:e.message});}const message=greeting?{text:greeting}:state.messages.find(m=>m.id===input.messageId&&m.role==='assistant');if(!message?.text)return json(res,400,{error:'Choose a saved AI reply to listen to.'});
 const cacheKey=(process.env.OPENAI_TTS_MODEL||'gpt-4o-mini-tts')+'|'+greeting,cached=greeting&&input.stream===true&&greetingAudio.get(cacheKey);if(cached){res.writeHead(200,{'Content-Type':'audio/pcm','Cache-Control':'no-store','X-Audio-Sample-Rate':'24000','X-Woven-Voice-Cache':'hit'});return res.end(cached);}const controller=new AbortController();res.once('close',()=>controller.abort());try{const upstream=await fetch('https://api.openai.com/v1/audio/speech',{method:'POST',headers:{Authorization:'Bearer '+apiKey,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.OPENAI_TTS_MODEL||'gpt-4o-mini-tts',voice:'coral',input:message.text.slice(0,4000),response_format:input.stream===true?'pcm':'mp3',stream_format:'audio'}),signal:AbortSignal.any([AbortSignal.timeout(45000),controller.signal])});if(!upstream.ok)return json(res,502,{error:apiError(upstream.status)});if(input.stream===true){res.writeHead(200,{'Content-Type':'audio/pcm','Cache-Control':'no-store','X-Audio-Sample-Rate':'24000'});res.flushHeaders();let total=0;const greetingChunks=[];for await(const chunk of upstream.body){if(controller.signal.aborted||res.destroyed)throw Error('Audio stopped');total+=chunk.length;if(greeting&&total<=1024*1024)greetingChunks.push(chunk);if(total>8*1024*1024)throw Error('Audio too large');if(!res.write(chunk))await new Promise((resolve,reject)=>{const clean=()=>{res.off('drain',drain);res.off('close',closed);};const drain=()=>{clean();resolve();},closed=()=>{clean();reject(Error('Audio stopped'));};res.once('drain',drain);res.once('close',closed);});}if(greeting&&total>0&&total<=1024*1024){if(greetingAudio.size>=30)greetingAudio.delete(greetingAudio.keys().next().value);greetingAudio.set(cacheKey,Buffer.concat(greetingChunks));}return res.end();}const bytes=Buffer.from(await upstream.arrayBuffer());if(!bytes.length||bytes.length>8*1024*1024)return json(res,502,{error:'The spoken reply could not be prepared.'});return json(res,200,{audio:bytes.toString('base64'),mime:'audio/mpeg',truncated:message.text.length>4000});}catch{if(res.headersSent){res.destroy();return;}return json(res,502,{error:'The spoken reply could not finish. Your written reply is still available.'});}
 }
 if(url.pathname==='/api/voice/transcribe'){
+releaseIO();
 if(!apiKey)return json(res,401,{error:'Connect AI to use voice input.',connectAI:true});
 let form;try{const recent=state.messages.filter(m=>m.role==='user'&&!transcriptNeedsReview(m.text,input.languages??input.language??'auto')&&(input.aiSession?m.ai_session===input.aiSession:m.thread_id===requestThread)).slice(-3).map(m=>m.text).join('\n');form=transcriptionForm(input,process.env.OPENAI_TRANSCRIBE_MODEL||'gpt-transcribe',[threadInfo(state,requestThread)?.title,recent].filter(Boolean).join('\n'));}catch(e){return json(res,400,{error:e.message});}
 try{const upstream=await fetch('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{Authorization:'Bearer '+apiKey},body:form,signal:AbortSignal.timeout(45000)});if(!upstream.ok)return json(res,502,{error:apiError(upstream.status)});const result=await upstream.json();if(typeof result.text!=='string'||!result.text.trim()||result.text.length>12000)return json(res,422,{error:'No clear speech was found. Please try again or type your message.'});return json(res,200,{text:result.text,requiresReview:transcriptNeedsReview(result.text,input.languages??input.language??'auto')});}catch{return json(res,502,{error:'Voice transcription could not finish. Please try again or type your message.'});}
@@ -243,6 +265,7 @@ const captured=!image&&captureReceivable(state,text,requestThread);
 if(captured){const assistant={id:randomUUID(),role:'assistant',text:captured.reply.message,question:captured.reply.question,actions:captured.reply.actions,thread_id:captured.threadId,capture_id:user.capture_id,at:new Date().toISOString(),...(aiSession?{ai_session:aiSession}:{})};user.thread_id=captured.threadId;const next={...captured.next,messages:[...state.messages,user,assistant].slice(-200)};await persist(next);return json(res,200,{state:safeState(state),threadId:captured.threadId});}
 if(!apiKey)return json(res,401,{error:'Connect AI to understand this message. Your saved conversations are still available.',connectAI:true});
 const scopedState={...state,recentCaptures:state.messages.filter(m=>m.role==='user').slice(-4).map(m=>({text:m.text,thread_id:m.thread_id})),messages:aiSession?assistantHistory(state,aiSession):input.captureId?state.messages.filter(m=>m.capture_id===input.captureId):input.newCapture?[]:threadMessages(state,requestThread),activeThread:threadInfo(state,requestThread)};
+const beforeAI=state;releaseIO();
 let upstream,result;try{upstream=await fetch('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},body:JSON.stringify(buildRequest(scopedState,user,model)),signal:AbortSignal.timeout(45000)});if(upstream.ok)result=await upstream.json();}catch{return json(res,502,{error:'The AI connection timed out or could not be reached. Your existing tasks are unchanged; you can retry.'});}
 if(!upstream.ok)return json(res,upstream.status===401?401:502,{error:apiError(upstream.status)});
 if(result.status!=='completed')return json(res,502,{error:'The model did not finish its response. Your tasks are unchanged. Please retry.'});
@@ -250,13 +273,15 @@ const output=result.output?.filter(x=>x.type==='message').flatMap(x=>x.content||
 if(output.some(x=>x.type==='refusal'))return json(res,422,{error:'The model could not help with that request. Try describing the task another way.'});
 let reply;try{reply=validateReply(JSON.parse(output.filter(x=>x.type==='output_text').map(x=>x.text).join('')));}catch{return json(res,502,{error:'The AI response was incomplete or invalid. Your tasks are unchanged; please retry.'});}
 if(user.intent==='analyze_task'&&(reply.memory_actions?.length||reply.actions.some(a=>!['add_step','add_context'].includes(a.type)||'group:'+a.group_id!==requestThread)))return json(res,502,{error:'The step review proposed an unrelated change. Your task is unchanged.'});
+await resumeState();
+const changedTargets=reply.actions.some(a=>{const id=a.note_id||a.group_id;if(!id||['create_group','create_note'].includes(a.type))return false;const old=(a.note_id?beforeAI.notes:beforeAI.groups).find(r=>r.id===id),fresh=(a.note_id?state.notes:state.groups).find(r=>r.id===id);return JSON.stringify(old)!==JSON.stringify(fresh);});if(changedTargets)return json(res,409,{error:'This item changed while AI was thinking. Review the latest item and send your instruction again.'});
 reply.actions=normalizeCaptureActions(state,reply.actions,text);const review=financialCreationReview(state,reply,text,requestThread);if(review){reply=review;if(review.relationTarget)requestThread=review.relationTarget;}
 let changed,noteState=state;try{changed=applyActions(state,reply.actions.filter(a=>!['create_note','update_note','set_relations'].includes(a.type)));for(const action of reply.actions.filter(a=>a.type==='create_note')){noteState=addNote({...noteState,groups:changed},{text:action.text||action.title,groupId:action.group_id,stepId:action.step_id,category:action.category,space:action.space});const note=noteState.notes.at(-1);note.people=action.people||[];action.note_id=note.id;}
 for(const action of reply.actions.filter(a=>a.type==='update_note')){if(!aiSession&&!input.captureId&&requestThread!=='note:'+action.note_id)throw Error('Unknown note');noteState=structuredClone(noteState);const note=noteState.notes.find(n=>n.id===action.note_id);if(!note||!action.text)throw Error('Unknown note');note.text+='\n'+action.text;if(note.money&&/\\d/u.test(action.text))note.money.hasAmountUpdates=true;note.updatedAt=new Date().toISOString();if(!note.category||/^(?:uncategorized|personal|work|family)$/i.test(note.category))Object.assign(note,classifyRecord(note.text,{space:note.space}));note.updates=[...(note.updates||[]),{id:randomUUID(),at:note.updatedAt,kind:'update',text:action.text}].slice(-100);}
 for(const action of reply.actions.filter(a=>a.type==='set_relations')){noteState=setRelations({...noteState,groups:changed},{threadId:action.note_id?'note:'+action.note_id:'group:'+action.group_id,category:action.category,people:action.people,parentId:action.parent_id,space:action.space});changed=noteState.groups;}
 }catch{return json(res,502,{error:'The AI proposed a change to a task or note it could not identify. Your saved data is unchanged.'});}
 if(requestThread==='inbox'||aiSession){const createdNote=reply.actions.find(a=>a.type==='create_note');const groupAction=reply.actions.find(a=>a.group_id&&changed.some(g=>g.id===a.group_id));const dateGroup=reply.question?.date_target?.group_id;const updatedNote=reply.actions.find(a=>a.type==='update_note');if(createdNote)requestThread='note:'+createdNote.note_id;else if(updatedNote)requestThread='note:'+updatedNote.note_id;else if(groupAction)requestThread='group:'+groupAction.group_id;else if(dateGroup&&changed.some(g=>g.id===dateGroup))requestThread='group:'+dateGroup;}
-user.thread_id=requestThread;
+user.thread_id=requestThread;delete user.image;
 if(user.intent!=='analyze_task'){const detected=detectRecurrence(text),affected=reply.actions.filter(a=>['create_group','add_step','add_context','set_recurrence'].includes(a.type));const ids=[...new Set(affected.map(a=>a.group_id))];if(detected&&ids.length===1&&!reply.actions.some(a=>a.type==='set_recurrence'||a.recurrence)){const group=changed.find(g=>g.id===ids[0]);if(group)group.recurrence=validateRecurrence(detected);}}
 if(user.intent==='analyze_task'){const group=changed.find(g=>'group:'+g.id===requestThread);group.stepsReviewedAt=new Date().toISOString();}
 const assistant={id:randomUUID(),role:'assistant',text:reply.message,question:reply.question,actions:reply.actions,thread_id:requestThread,capture_id:user.capture_id,at:new Date().toISOString()};
@@ -270,7 +295,7 @@ if(url.pathname==='/api/undo'){
 if(!state.undo.length)return json(res,400,{error:'There is no task change to undo yet.'});const next=structuredClone(state);next.groups=next.undo.pop();finish(next,'I’ve undone the last change to your tasks.');await persist(next);return json(res,200,{state:safeState(state)});
 }
 return json(res,404,{error:'Not found.'});
-}finally{busy=false;scheduleLearning(req.headers.cookie||'');}
+}finally{busy=false;releaseRequest();scheduleLearning(req.headers.cookie||'');}
 }catch(e){json(res,e.status||500,{error:e.status?e.message:'The app could not save this change. Please try again. Your saved data has been preserved.',...(cloud&&e.status===401?{authRequired:true}:{})});}
 });
 server.listen(port,cloud&&secure?'0.0.0.0':'127.0.0.1',()=>console.log(`Woven is ready: ${origin}`));

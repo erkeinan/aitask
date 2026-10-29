@@ -18,7 +18,7 @@ export function classifyRecord(text,{space='',category='',parent=null}={}){
 export function financialRecord(record){return !!record.money||loan.test([record.category,record.text,record.title].filter(Boolean).join(' '));}
 export function reviewSegmentation(state){
   const next=structuredClone(state);
-  for(const record of [...next.groups,...(next.notes||[])]){if(record.classificationManual)continue;const text=[record.title,record.text,...(record.steps||[]).map(s=>s.title),...(record.sources||[])].filter(Boolean).join('\n');Object.assign(record,classifyRecord(text,{space:record.space,category:record.category,parent:next.groups.find(g=>g.id===(record.parentId||record.groupId))}));}
+  for(const record of [...next.groups,...(next.notes||[])]){if(record.classificationManual||record.needsSegmentation)continue;const text=[record.title,record.text,...(record.steps||[]).map(s=>s.title),...(record.sources||[])].filter(Boolean).join('\n');Object.assign(record,classifyRecord(text,{space:record.space,category:record.category,parent:next.groups.find(g=>g.id===(record.parentId||record.groupId))}));}
   next.segmentationVersion=2;return next;
 }
 export function financialFollowup(text){return /\d/u.test(text)&&(/\b(?:another|additional|more|also|total|loan|lent|borrowed|owe)\b|עוד|נוסף|סכום|הלווא|חייב|בסך/iu.test(text)||/^\s*[₪$€£]?\s*[\d,.]+\s*(?:ILS|USD|EUR|שקל(?:ים)?|ש[״"]?ח)?[.!]?\s*$/iu.test(text));}

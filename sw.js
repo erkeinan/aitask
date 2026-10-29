@@ -1,5 +1,5 @@
-const OFFLINE_CACHE='woven-pwa-offline-v2';
-const SHELL=['/','/app.js','/pwa.mjs','/offline-store.mjs','/device-alerts.mjs','/reminders.mjs','/knowledge-ui.mjs','/ai-page.mjs','/voice-turn.mjs','/voice-preferences.mjs','/threads.mjs','/task-model.mjs','/task-intelligence.mjs','/productivity.mjs','/celebration.mjs','/network.mjs','/style.css','/chat.css','/inbox.css','/records.css','/compact.css','/icons/woven-192.png'];
+const OFFLINE_CACHE='woven-pwa-offline-v3';
+const SHELL=['/','/app.js','/pwa.mjs','/offline-store.mjs','/device-alerts.mjs','/reminders.mjs','/knowledge-ui.mjs','/ai-page.mjs','/voice-turn.mjs','/voice-preferences.mjs','/threads.mjs','/task-model.mjs','/task-intelligence.mjs','/productivity.mjs','/celebration.mjs','/network.mjs','/style.css','/chat.css','/inbox.css','/records.css','/compact.css','/messaging.css','/icons/woven-192.png'];
 self.addEventListener('install',event=>{event.waitUntil(caches.open(OFFLINE_CACHE).then(cache=>cache.addAll(SHELL)).then(()=>self.skipWaiting()));});
 self.addEventListener('activate',event=>{event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(key=>key.startsWith('woven-pwa-offline-')&&key!==OFFLINE_CACHE).map(key=>caches.delete(key)))).then(()=>self.clients.claim()));});
 self.addEventListener('fetch',event=>{
