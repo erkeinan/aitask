@@ -13,5 +13,5 @@ export function transcriptionForm(input,model='gpt-transcribe',context=''){
 }
 export function transcriptNeedsReview(text,language='auto'){
   const arabic=(String(text).match(/[\u0600-\u06ff]/gu)||[]).length,hebrew=(String(text).match(/[\u0590-\u05ff]/gu)||[]).length;
-  return language==='he'&&arabic>2&&arabic>hebrew;
+  const selected=Array.isArray(language)?language:[language];return selected.includes('he')&&!selected.includes('ar')&&arabic>2&&arabic>hebrew;
 }

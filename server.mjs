@@ -1,5 +1,6 @@
 import {createGate} from './request-gate.mjs';
 import {aiVault} from './ai-vault.mjs';
+import {captureFile} from './capture-file.mjs';
 import http from 'node:http';
 import {readFile,writeFile,mkdir,rename,unlink} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -50,6 +51,7 @@ const cloud=config?createCloud(config,{secure}):null;
 const safeState=state=>({...state,memory:memoryView(state),knowledge:undefined,messages:state.messages.map(m=>({...m,image:undefined,hasImage:!!m.image}))});
 let learningTimer,learningRunning=false;
 const writeState=async(session,next,version)=>{
+  next.clientRevision=(next.clientRevision||0)+1;
   if(cloud)return cloud.save(session,next,version);
   await writeFile(join(dataDir,'state.tmp'),JSON.stringify(next,null,2));await rename(join(dataDir,'state.tmp'),join(dataDir,'state.json'));localState=next;
 };
@@ -103,7 +105,7 @@ const pwaAssets={'/manifest.webmanifest':['manifest.webmanifest','application/ma
 if(req.method==='GET'&&pwaAssets[url.pathname]){const [file,mime]=pwaAssets[url.pathname];res.writeHead(200,{'Content-Type':mime,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff',...(url.pathname==='/sw.js'?{'Service-Worker-Allowed':'/'}:{})});return res.end(await readFile(join(root,file)));}
 if(req.method==='GET'&&/^\/vendor\/pdfjs\/(?:pdf(?:\.worker)?\.mjs|LICENSE|(?:cmaps|standard_fonts|wasm|iccs)\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)$/.test(url.pathname)){
 const bytes=await readFile(join(root,url.pathname.slice(1)));res.writeHead(200,{'Content-Type':url.pathname.endsWith('.mjs')?'text/javascript; charset=utf-8':url.pathname.endsWith('.wasm')?'application/wasm':'application/octet-stream','Cache-Control':'public, max-age=3600','X-Content-Type-Options':'nosniff'});return res.end(bytes);}
-if(req.method==='GET'&&['/offline-store.mjs','/device-alerts.mjs','/reminders.mjs','/','/app.js','/pwa.mjs','/knowledge-ui.mjs','/ai-page.mjs','/voice-turn.mjs','/voice-preferences.mjs','/threads.mjs','/task-model.mjs','/task-intelligence.mjs','/productivity.mjs','/celebration.mjs','/network.mjs','/style.css','/chat.css','/inbox.css','/records.css','/compact.css','/messaging.css'].includes(url.pathname)){
+if(req.method==='GET'&&['/capture-sync.mjs','/offline-store.mjs','/device-alerts.mjs','/reminders.mjs','/','/app.js','/pwa.mjs','/knowledge-ui.mjs','/ai-page.mjs','/voice-turn.mjs','/voice-preferences.mjs','/threads.mjs','/task-model.mjs','/task-intelligence.mjs','/productivity.mjs','/celebration.mjs','/network.mjs','/style.css','/chat.css','/inbox.css','/records.css','/compact.css','/messaging.css'].includes(url.pathname)){
 const name=url.pathname==='/'?'index.html':url.pathname.slice(1);const text=await readFile(join(root,name));res.writeHead(200,{'Content-Type':name.endsWith('.html')?'text/html; charset=utf-8':(name.endsWith('.js')||name.endsWith('.mjs'))?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; font-src 'self' blob: data:; img-src 'self' data: blob:; frame-src 'self'; object-src 'none'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'self'; base-uri 'none'; form-action 'self'"});return res.end(text);}
 if(!url.pathname.startsWith('/api/'))return json(res,404,{error:'Not found.'});
 if(cloud&&req.method==='POST'&&url.pathname==='/api/auth/login'){
@@ -252,16 +254,18 @@ try{const upstream=await fetch('https://api.openai.com/v1/audio/transcriptions',
 }
 if(url.pathname==='/api/chat'){
 let aiSession;try{aiSession=assistantSession(input);}catch(e){return json(res,400,{error:e.message});}
-const text=String(input.text||'').trim();const image=input.image||null;
+let text=String(input.text||'').trim();const image=input.image||null;let fileInput=null;
+if(input.file){try{const {file,bytes}=validateUpload(state,input.file);fileInput=captureFile(file.name,bytes);}catch(e){return json(res,e.status||400,{error:e.message});}}
+if(input.audio){if(!apiKey)return json(res,401,{error:'Connect AI to understand voice messages.',connectAI:true});releaseIO();try{const form=transcriptionForm(input,process.env.OPENAI_TRANSCRIBE_MODEL||'gpt-transcribe');const upstream=await fetch('https://api.openai.com/v1/audio/transcriptions',{method:'POST',headers:{Authorization:'Bearer '+apiKey},body:form,signal:AbortSignal.timeout(45000)});if(!upstream.ok)return json(res,502,{error:apiError(upstream.status)});const transcript=await upstream.json();text=String(transcript.text||'').trim();if(!text)return json(res,422,{error:'No clear speech was heard. Please try again.'});if(transcriptNeedsReview(text,input.languages??input.language??'auto'))return json(res,200,{state:safeState(state),threadId:requestThread,transcript:text,requiresReview:true});await resumeState();}catch(e){return json(res,e.status||502,{error:e.status?e.message:'Could not understand the recording. Please try again.'});}}
 if(text.length>12000)return json(res,400,{error:'Please send a shorter message.'});
 if(image&&(!/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(image)||image.length>14*1024*1024))return json(res,400,{error:'Use a PNG, JPEG, WebP or GIF image under 10 MB.'});
-if(!text&&!image)return json(res,400,{error:'Write a message or attach an image.'});
-const user={id:randomUUID(),role:'user',text:text||'Please read this image and help me organize any tasks.',image,thread_id:requestThread,at:new Date().toISOString()};
+if(!text&&!image&&!fileInput)return json(res,400,{error:'Write a message or attach an image.'});
+const user={id:randomUUID(),role:'user',text:text||'Please read this image and help me organize any tasks.',image,fileInput,thread_id:requestThread,at:new Date().toISOString()};
 if(aiSession){user.intent='assistant_page';user.ai_session=aiSession;}
 if(input.voice===true)user.voice=true;
 if(input.intent==='analyze_task'){if(!requestThread.startsWith('group:'))return json(res,400,{error:'Choose a task to review.'});user.intent='analyze_task';}
 if(input.captureId){if(typeof input.captureId!=='string'||!/^[0-9a-f-]{36}$/i.test(input.captureId))return json(res,400,{error:'Start a new capture and try again.'});user.capture_id=input.captureId;}
-const captured=!image&&captureReceivable(state,text,requestThread);
+const captured=!image&&!fileInput&&captureReceivable(state,text,requestThread);
 if(captured){const assistant={id:randomUUID(),role:'assistant',text:captured.reply.message,question:captured.reply.question,actions:captured.reply.actions,thread_id:captured.threadId,capture_id:user.capture_id,at:new Date().toISOString(),...(aiSession?{ai_session:aiSession}:{})};user.thread_id=captured.threadId;const next={...captured.next,messages:[...state.messages,user,assistant].slice(-200)};await persist(next);return json(res,200,{state:safeState(state),threadId:captured.threadId});}
 if(!apiKey)return json(res,401,{error:'Connect AI to understand this message. Your saved conversations are still available.',connectAI:true});
 const scopedState={...state,recentCaptures:state.messages.filter(m=>m.role==='user').slice(-4).map(m=>({text:m.text,thread_id:m.thread_id})),messages:aiSession?assistantHistory(state,aiSession):input.captureId?state.messages.filter(m=>m.capture_id===input.captureId):input.newCapture?[]:threadMessages(state,requestThread),activeThread:threadInfo(state,requestThread)};
@@ -281,7 +285,7 @@ for(const action of reply.actions.filter(a=>a.type==='update_note')){if(!aiSessi
 for(const action of reply.actions.filter(a=>a.type==='set_relations')){noteState=setRelations({...noteState,groups:changed},{threadId:action.note_id?'note:'+action.note_id:'group:'+action.group_id,category:action.category,people:action.people,parentId:action.parent_id,space:action.space});changed=noteState.groups;}
 }catch{return json(res,502,{error:'The AI proposed a change to a task or note it could not identify. Your saved data is unchanged.'});}
 if(requestThread==='inbox'||aiSession){const createdNote=reply.actions.find(a=>a.type==='create_note');const groupAction=reply.actions.find(a=>a.group_id&&changed.some(g=>g.id===a.group_id));const dateGroup=reply.question?.date_target?.group_id;const updatedNote=reply.actions.find(a=>a.type==='update_note');if(createdNote)requestThread='note:'+createdNote.note_id;else if(updatedNote)requestThread='note:'+updatedNote.note_id;else if(groupAction)requestThread='group:'+groupAction.group_id;else if(dateGroup&&changed.some(g=>g.id===dateGroup))requestThread='group:'+dateGroup;}
-user.thread_id=requestThread;delete user.image;
+user.thread_id=requestThread;delete user.image;delete user.fileInput;
 if(user.intent!=='analyze_task'){const detected=detectRecurrence(text),affected=reply.actions.filter(a=>['create_group','add_step','add_context','set_recurrence'].includes(a.type));const ids=[...new Set(affected.map(a=>a.group_id))];if(detected&&ids.length===1&&!reply.actions.some(a=>a.type==='set_recurrence'||a.recurrence)){const group=changed.find(g=>g.id===ids[0]);if(group)group.recurrence=validateRecurrence(detected);}}
 if(user.intent==='analyze_task'){const group=changed.find(g=>'group:'+g.id===requestThread);group.stepsReviewedAt=new Date().toISOString();}
 const assistant={id:randomUUID(),role:'assistant',text:reply.message,question:reply.question,actions:reply.actions,thread_id:requestThread,capture_id:user.capture_id,at:new Date().toISOString()};
@@ -289,7 +293,7 @@ if(aiSession)assistant.ai_session=aiSession;
 let next={...state,groups:changed,notes:noteState.notes,messages:[...state.messages,user,assistant].slice(-200),undo:reply.actions.some(a=>a.type!=='create_note')?[...state.undo,state.groups].slice(-15):state.undo};
 try{next=applyMemoryActions(next,reply.memory_actions,text);}catch{return json(res,502,{error:'The memory change could not be safely identified. Your saved data is unchanged. Use What Woven knows to review it.'});}
 await persist(next);
-return json(res,200,{state:safeState(state),threadId:requestThread,archiveCandidates:reply.actions.some(a=>a.type==='complete_step')?archiveCandidates(next):[],usage:result.usage?{input:result.usage.input_tokens,output:result.usage.output_tokens}:null});
+return json(res,200,{state:safeState(state),threadId:requestThread,transcript:input.audio?text:undefined,archiveCandidates:reply.actions.some(a=>a.type==='complete_step')?archiveCandidates(next):[],usage:result.usage?{input:result.usage.input_tokens,output:result.usage.output_tokens}:null});
 }
 if(url.pathname==='/api/undo'){
 if(!state.undo.length)return json(res,400,{error:'There is no task change to undo yet.'});const next=structuredClone(state);next.groups=next.undo.pop();finish(next,'I’ve undone the last change to your tasks.');await persist(next);return json(res,200,{state:safeState(state)});
