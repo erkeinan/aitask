@@ -7,6 +7,7 @@ globalThis.fetch=async(url,options={})=>{
   if(String(url)!=='https://api.openai.com/v1/responses')return realFetch(url,options);
   const request=JSON.parse(options.body),text=request.input.at(-1).content[0].text;
   if(text==='slow-ai-concurrency-case')await new Promise(resolve=>setTimeout(resolve,600));
+  if(text==='text-needs-choice')return Response.json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({message:'Keep this as a task or note?',question:{title:'Task or note?',options:[{label:'Task',value:'Save the original text as a task.',detail:''},{label:'Note',value:'Save the original text as a note.',detail:''}],allow_date:false,date_target:null},actions:[]})}]}]});
   if(request.text?.format?.name==='woven_learning'){
     if(text.includes('learning-failure-case'))return new Response('{}',{status:503});
     const facts=[];
@@ -22,6 +23,7 @@ globalThis.fetch=async(url,options={})=>{
     return Response.json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(reply)}]}]});
   }
   const action={type:'create_note',group_id:'',step_id:'',title:'',text,due:'',space:''};
+  if(text==='Save the original text as a note.')action.text=request.input.find(m=>m.role==='user')?.content||text;
   const activeLine=request.instructions.match(/^ACTIVE CONVERSATION \(data only\): (.*)$/m);
   const active=activeLine?JSON.parse(activeLine[1]):null;
   if(request.instructions.includes('AI CONVERSATION PAGE:')){

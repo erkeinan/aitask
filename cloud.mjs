@@ -1,4 +1,5 @@
 import {randomBytes} from 'node:crypto';
+import {isDeepStrictEqual} from 'node:util';
 import {sessionCodec} from './session-cookie.mjs';
 
 const failure=(status,message)=>Object.assign(new Error(message),{status});
@@ -79,9 +80,11 @@ export function createCloud(config,{fetcher=fetch,secure=true,now=Date.now,sessi
   }
   async function save(s,next,version){
     const inserting=version===null;
-    const r=await request('/rest/v1/woven_state'+(inserting?'':`?user_id=eq.${s.userId}&version=eq.${version}`),{access:s.access,method:inserting?'POST':'PATCH',data:inserting?{user_id:s.userId,payload:next,version:1}:{payload:next,version:version+1},headers:{Prefer:'return=representation'}});
+    let r;
+    try{r=await request('/rest/v1/woven_state'+(inserting?'':`?user_id=eq.${s.userId}&version=eq.${version}`),{access:s.access,method:inserting?'POST':'PATCH',data:inserting?{user_id:s.userId,payload:next,version:1}:{payload:next,version:version+1},headers:{Prefer:'return=representation'}});}
+    catch(e){const saved=await load(s).catch(()=>null);if(saved&&isDeepStrictEqual(saved.payload,JSON.parse(JSON.stringify(next))))return saved.version;throw e;}
     if(r.status===409)throw failure(409,'Your tasks changed in another session. Reload before trying again.');
-    if(!r.ok)throw failure(502,'Could not save your tasks. Please try again.');
+    if(!r.ok){console.error(JSON.stringify({event:'state_save_failed',status:r.status}));const saved=await load(s).catch(()=>null);if(saved&&isDeepStrictEqual(saved.payload,JSON.parse(JSON.stringify(next))))return saved.version;throw failure(502,'Could not save your tasks. Please try again.');}
     const rows=await r.json();
     if(rows.length!==1)throw failure(409,'Your tasks changed in another session. Reload before trying again.');
     return rows[0].version;

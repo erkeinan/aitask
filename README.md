@@ -1,5 +1,28 @@
 # Woven · local AI test
 
+## Faster capture trial
+
+Text in automatic mode is saved to the device immediately, then to the account
+as a pending capture. AI organizes it while the app remains usable. Pending
+entries survive refreshes; organization resumes when the app is opened online.
+Questions remain marked **Needs your answer**, with the original text and the
+same answer options. Failed organization keeps the source and offers a retry.
+Completed capture IDs prevent duplicate retries and recreation after deletion.
+Files and screenshots retain their guided reading flow, now with a working
+indicator, high-detail images and a larger response allowance for full lists.
+
+Done updates the screen immediately and reconciles with saved state after errors.
+Task opening no longer automatically starts AI step review. Active tasks and
+notes both expose permanent deletion. Named projects take precedence over broad
+activity categories, such as **Work / Carmia**. Original language and wording
+are preserved by the assistant instructions. Existing manually classified items
+remain as chosen by the user.
+
+The server restores encrypted AI settings on AI requests and retries temporary
+missing settings rather than caching a disconnected result. Cloud writes verify
+whether an unacknowledged save actually committed before reporting failure.
+This does not change the encryption secret or bypass login and ownership checks.
+
 **What Woven knows**, available in the main menu and AI chat, shows profiles,
 individual facts, their sources and dates. Browse People, About me, Preferences,
 Other and Recently learned; search and filter facts that need review. Add or edit

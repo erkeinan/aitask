@@ -1,0 +1,51 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {spawn} from 'node:child_process';
+import {mkdtemp,readFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {saveTextCapture,resolveTextCapture} from '../text-captures.mjs';
+import {classifyRecord,projectCategory,normalizeCaptureActions} from '../segmentation.mjs';
+import {buildRequest,initialState,validateReply} from '../assistant.mjs';
+import {applyActions} from '../assistant.mjs';
+test('capture is durable and idempotent; questions preserve the source until answered',()=>{
+ const source={...initialState(),notes:[],files:[]},id=randomUUID(),saved=saveTextCapture(source,{id,text:'Keep this exactly'});
+ assert.equal(saved.groups.length,source.groups.length);assert.equal(saved.pendingCaptures[0].text,'Keep this exactly');assert.equal(source.pendingCaptures,undefined);
+ assert.equal(saveTextCapture(saved,{id,text:'Duplicate'}).pendingCaptures.length,1);
+ const question={title:'Task or note?',options:[]},waiting=resolveTextCapture(saved,id,{question,message:'Please choose'},'inbox');
+ assert.equal(waiting.pendingCaptures[0].status,'question');assert.deepEqual(waiting.pendingCaptures[0].question,question);
+ assert.equal(resolveTextCapture(waiting,id,{question:null},'note:one').pendingCaptures.length,0);
+ assert.throws(()=>saveTextCapture(source,{id,text:'x'.repeat(20001)}));
+});
+test('project names take precedence over activities and propagate to linked notes',()=>{
+ assert.deepEqual(classifyRecord('Develop the Carmia website',{category:'Development'}),{space:'Work',category:'Carmia'});
+ assert.equal(classifyRecord('פיתוח האתר של כרמיה').category,'Carmia');
+ assert.equal(projectCategory('Fix Apollo deployment',{groups:[{category:'Apollo'}],notes:[]}),'Apollo');
+ assert.equal(classifyRecord('Update backend',{category:'Development',parent:{space:'Work',category:'Carmia'}}).category,'Carmia');
+ assert.equal(classifyRecord('website fixes for another client',{category:'Development'}).category,'Websites');
+});
+test('long shopping lists retain all items and attachments get a larger response budget',()=>{
+ const state={...initialState(),notes:[]},items=Array.from({length:35},(_,i)=>`Item ${i+1} quantity ${i+1}`),action={type:'create_group',group_id:'shopping',title:'Shopping',text:items.join('\n'),category:'Shopping'};
+ const groups=applyActions(state,[action]);assert.equal(groups.at(-1).steps.length,35);assert.equal(groups.at(-1).steps.at(-1).title,items.at(-1));
+ assert.equal(validateReply({message:'Saved',question:null,actions:Array.from({length:35},()=>({...action,space:'Personal',due:'',step_id:''}))}).actions.length,35);
+ assert.ok(buildRequest(state,{text:'Read list',fileInput:{type:'input_image',image_url:'data:image/png;base64,test'}},'test').max_output_tokens>buildRequest(state,{text:'Hello'},'test').max_output_tokens);
+});
+test('background text survives reload, creates once under concurrent retries, and does not block Done',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'woven-text-')),origin='http://127.0.0.1:14352';
+ const server=spawn(process.execPath,['--import','./test/fixtures/fake-ai.mjs','server.mjs'],{cwd:new URL('../',import.meta.url),env:{...process.env,PORT:'14352',WOVEN_APP_URL:origin,WOVEN_DATA_DIR:dir,WOVEN_STORAGE:'',RENDER:'',NODE_ENV:'test',OPENAI_API_KEY:'test-only'},windowsHide:true,stdio:['ignore','pipe','pipe']});t.after(()=>server.kill());
+ await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Startup timeout')),10000);server.stdout.once('data',()=>{clearTimeout(timer);resolve();});server.stderr.once('data',v=>{clearTimeout(timer);reject(Error(String(v)));});});
+ const status=await(await fetch(origin+'/api/status')).json(),post=async(path,data)=>{const r=await fetch(origin+path,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json','X-Woven-Token':status.token},body:JSON.stringify({threadId:'inbox',...data})});const body=await r.json();assert.equal(r.status,200,JSON.stringify(body));return body;};
+ const id=randomUUID();await post('/api/capture/text',{id,text:'slow-ai-concurrency-case'});await post('/api/capture/text',{id,text:'slow-ai-concurrency-case'});
+ assert.equal((await(await fetch(origin+'/api/status')).json()).state.pendingCaptures.length,1);
+ const started=Date.now(),ai=post('/api/chat',{captureId:id,newCapture:true,backgroundCapture:true}),duplicate=post('/api/chat',{captureId:id,newCapture:true,backgroundCapture:true});
+ await new Promise(resolve=>setTimeout(resolve,100));const completed=await post('/api/task/finish',{groupId:'dinner',threadId:'group:dinner'});assert.ok(completed.state.groups.find(g=>g.id==='dinner').completedAt);assert.ok(Date.now()-started<600);
+ await Promise.all([ai,duplicate]);const final=(await(await fetch(origin+'/api/status')).json()).state;
+ assert.equal(final.pendingCaptures.length,0);assert.equal(final.notes.filter(n=>n.text==='slow-ai-concurrency-case').length,1);assert.ok(final.groups.find(g=>g.id==='dinner').completedAt);
+ assert.equal(JSON.parse(await readFile(join(dir,'state.json'),'utf8')).pendingCaptures.length,0);
+ const noteId=final.notes.find(n=>n.text==='slow-ai-concurrency-case').id;await post('/api/record/delete',{threadId:'note:'+noteId,confirmed:true});await post('/api/record/delete',{threadId:'note:'+noteId,confirmed:true});
+ await post('/api/capture/text',{id,text:'slow-ai-concurrency-case'});const retry=await post('/api/chat',{captureId:id,backgroundCapture:true});assert.ok(!retry.state.notes.some(n=>n.id===noteId));assert.ok(!retry.state.notes.some(n=>n.text==='slow-ai-concurrency-case'));
+ const choice=randomUUID();await post('/api/capture/text',{id:choice,text:'text-needs-choice'});await post('/api/chat',{captureId:choice,backgroundCapture:true});
+ const waiting=(await(await fetch(origin+'/api/status')).json()).state.pendingCaptures[0];assert.equal(waiting.status,'question');assert.equal(waiting.text,'text-needs-choice');assert.equal(waiting.question.options.length,2);
+ const answer=await post('/api/chat',{captureId:choice,text:'Save the original text as a note.'});assert.equal(answer.state.pendingCaptures.length,0);assert.ok(answer.state.notes.some(n=>n.text==='text-needs-choice'));
+});

@@ -81,3 +81,10 @@ test('storage is scoped to user paths and uses the documented deletion API',asyn
   assert.equal((await h.cloud.download(s,id)).toString(),'document');await h.cloud.remove(s,id);
   await assert.rejects(h.cloud.download(s,'../private'),{status:400});
 });
+
+test('a committed save with a lost acknowledgement is verified instead of reported as failed',async()=>{
+ let row=null;
+ const h=harness((url,opts)=>{if(opts.method==='GET')return json(row?[row]:[]);row=JSON.parse(opts.body);throw Error('Connection dropped after commit');});
+ const payload={groups:[],notes:[{text:'Keep exactly once'}]},s={userId:owner,access:'test-access'};
+ assert.equal(await h.cloud.save(s,payload,null),1);assert.deepEqual((await h.cloud.load(s)).payload,payload);
+});
